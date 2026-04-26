@@ -4,6 +4,7 @@ import zipfile
 import tempfile
 import os
 import traceback
+import sys
 
 st.set_page_config(page_title="PDF 处理平台", layout="wide")
 
@@ -21,7 +22,7 @@ except ImportError as e:
     DEPENDENCIES_LOADED = False
     st.error("环境依赖异常")
     st.warning(f"详细追踪: {e}")
-    st.info("请确保安装: pip install PyMuPDF pdf2docx docx2pdf")
+    st.info("请确保安装: pip install PyMuPDF pdf2docx")
 
 # ================= 核心处理逻辑 =================
 def universal_to_pdf(file_obj):
@@ -29,33 +30,34 @@ def universal_to_pdf(file_obj):
     file_bytes = file_obj.read()
     ext = os.path.splitext(file_obj.name)[1].lower().replace('.', '')
     
-    # 已经是 PDF，直接返回
     if ext == 'pdf':
         return file_bytes
         
-    # PyMuPDF 原生支持直接转换为 PDF 的格式
     if ext in ['txt', 'epub', 'xps', 'cbz', 'fb2', 'png', 'jpg', 'jpeg']:
         doc = fitz.open(stream=file_bytes, filetype=ext)
         pdf_bytes = doc.convert_to_pdf()
         doc.close()
         return pdf_bytes
         
-    # 针对 Word 文档的转换尝试
     if ext in ['docx']:
-        try:
-            from docx2pdf import convert
-            with tempfile.TemporaryDirectory() as temp_dir:
-                docx_path = os.path.join(temp_dir, "temp.docx")
-                pdf_path = os.path.join(temp_dir, "temp.pdf")
-                with open(docx_path, "wb") as f:
-                    f.write(file_bytes)
-                # docx2pdf 需要系统环境中有 Word 支持
-                convert(docx_path, pdf_path) 
-                with open(pdf_path, "rb") as f:
-                    return f.read()
-        except Exception as e:
-            st.error(f"[{file_obj.name}] 转换失败。DOCX 转 PDF 需要本地安装 MS Word。报错: {e}")
+        # 核心防护逻辑：检测操作系统
+        if sys.platform.startswith('linux'):
+            st.error(f"[{file_obj.name}] 解析拦截：云端 Linux 环境暂不支持原生 Word 转换，请先在本地将其另存为 PDF 后再上传。")
             return None
+        else:
+            try:
+                from docx2pdf import convert
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    docx_path = os.path.join(temp_dir, "temp.docx")
+                    pdf_path = os.path.join(temp_dir, "temp.pdf")
+                    with open(docx_path, "wb") as f:
+                        f.write(file_bytes)
+                    convert(docx_path, pdf_path) 
+                    with open(pdf_path, "rb") as f:
+                        return f.read()
+            except Exception as e:
+                st.error(f"[{file_obj.name}] 转换失败。请确认本地已安装 MS Word。报错: {e}")
+                return None
             
     st.error(f"暂不支持转换该格式: {ext}")
     return None
@@ -95,7 +97,6 @@ def convert_pdf_to_docx(pdf_bytes):
 def get_page_preview(file_bytes, page_index, high_res=True):
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page = doc.load_page(page_index)
-    # 优化 1: 将渲染矩阵从 2.0 提升至 4.0，实现真正的 Retina 级超清渲染
     zoom_factor = 4.0 if high_res else 1.0
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor)) 
     return pix.tobytes("png")
@@ -122,7 +123,6 @@ if DEPENDENCIES_LOADED:
     
     st.header("01 | 文档导入与范围界定")
     
-    # 优化 3: 开放更多格式传入
     uploaded_files = st.file_uploader(
         "拖拽上传文档 (支持 PDF, DOCX, TXT, EPUB, 图片)", 
         accept_multiple_files=True,
@@ -136,10 +136,9 @@ if DEPENDENCIES_LOADED:
         for file in uploaded_files:
             with st.expander(f"文档属性: {file.name}", expanded=True):
                 try:
-                    # 拦截层：自动转换为 PDF 字节流
                     pdf_bytes = universal_to_pdf(file)
                     if not pdf_bytes:
-                        continue # 转换失败则跳过该文件
+                        continue 
                         
                     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                     total_pages = doc.page_count
@@ -154,7 +153,6 @@ if DEPENDENCIES_LOADED:
                     col1, col2 = st.columns([1, 2])
                     
                     with col1:
-                        # 优化 2: 调整比例为 [2, 1.5] 并增加 step=1，防止加减号因空间拥挤被隐藏
                         nav_col1, nav_col2 = st.columns([2, 1.5])
                         with nav_col1:
                             st.slider("滑动定位", min_value=1, max_value=total_pages, value=st.session_state[state_key], key=slider_key, on_change=sync_page, args=(slider_key, state_key), label_visibility="collapsed")
